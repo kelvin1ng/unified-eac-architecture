@@ -1,11 +1,14 @@
 output "replication_role_arn" {
-  value = aws_iam_role.replication_role.arn
+  description = "ARN of the IAM role used for S3 replication"
+  value       = module.s3_secure.replication_role_arn
 }
 
 output "bucket_name" {
-  value = aws_s3_bucket.artifacts.bucket
+  description = "Name of the primary artifacts bucket"
+  value       = module.s3_secure.bucket_name
 }
 
 output "bucket_arn" {
-  value = aws_s3_bucket.artifacts.arn
+  description = "ARN of the primary artifacts bucket"
+  value       = module.s3_secure.bucket_arn
 }

@@ -1,27 +1,23 @@
+#############################################
+# s3-secure module input variables
+#############################################
+
 variable "bucket_name" {
-  description = "The name of the primary S3 bucket."
+  description = "Name for the primary artifacts bucket"
   type        = string
 }
 
 variable "project_tag" {
-  description = "Project tag for resources"
+  description = "Project tag value used on all S3 resources"
   type        = string
-  default     = "unified-eac"
-}
-
-variable "replica_region" {
-  description = "Destination region for replication."
-  type        = string
-  default     = "us-east-1"
 }
 
 variable "random_suffix" {
-  description = "Random suffix for resource naming"
+  description = "Random suffix used to ensure globally unique bucket names"
   type        = string
 }
 
 variable "sns_topic_arn" {
-  description = "SNS topic ARN for S3 event notifications"
+  description = "ARN of the SNS topic to receive S3 bucket notifications"
   type        = string
 }
-

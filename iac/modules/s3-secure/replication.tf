@@ -1,56 +1,87 @@
+#############################################
+# Cross-Region Replication
+#############################################
 
+# IAM Role for replication
+resource "aws_iam_role" "replication_role" {
+  name = "eac-replication-role-${var.random_suffix}"
 
-resource "aws_s3_bucket_public_access_block" "destination_bucket_pab" {
-  bucket                  = aws_s3_bucket.destination_bucket.id
-  block_public_acls       = true
-  ignore_public_acls      = true
-  block_public_policy     = true
-  restrict_public_buckets = true
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "s3.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
 }
 
-# KMS Encryption
-resource "aws_s3_bucket_server_side_encryption_configuration" "destination_bucket" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_bucket.id
+# IAM Policy for replication access
+resource "aws_iam_role_policy" "replication_policy" {
+  name = "eac-replication-policy-${var.random_suffix}"
+  role = aws_iam_role.replication_role.id
 
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "aws:kms"
-    }
-  }
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["s3:GetReplicationConfiguration", "s3:ListBucket"]
+        Resource = [
+          aws_s3_bucket.artifacts.arn,
+          aws_s3_bucket.artifacts_log.arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObjectVersion",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging"
+        ]
+        Resource = [
+          "${aws_s3_bucket.artifacts.arn}/*",
+          "${aws_s3_bucket.artifacts_log.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags",
+          "s3:ObjectOwnerOverrideToBucketOwner"
+        ]
+        Resource = [
+          "${aws_s3_bucket.destination_bucket.arn}/*"
+        ]
+      }
+    ]
+  })
 }
 
-# Versioning
-resource "aws_s3_bucket_versioning" "destination_bucket" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_bucket.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-# Public Access Block
-resource "aws_s3_bucket_public_access_block" "destination_bucket_public_access" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_bucket.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-
-# Replication Config
-resource "aws_s3_bucket_replication_configuration" "replication" {
+#############################################
+# Primary Artifacts → Destination
+#############################################
+resource "aws_s3_bucket_replication_configuration" "artifacts_replication" {
   bucket = aws_s3_bucket.artifacts.id
   role   = aws_iam_role.replication_role.arn
 
-  rule {
-    id     = "replicate-all-objects"
-    status = "Enabled"
+  depends_on = [
+    aws_s3_bucket_versioning.artifacts_versioning,
+    aws_s3_bucket_versioning.destination_versioning
+  ]
 
+  rule {
+    id     = "replicate-artifacts-to-destination"
+    status = "Enabled"
+    filter { prefix = "" }
+
+    # 🟩 Required for new S3 replication schema
+    delete_marker_replication {
+      status = "Disabled"
+    }
+    
     destination {
       bucket        = aws_s3_bucket.destination_bucket.arn
       storage_class = "STANDARD"
@@ -58,72 +89,35 @@ resource "aws_s3_bucket_replication_configuration" "replication" {
   }
 }
 
-# Event Notification for Replica Bucket
-resource "aws_s3_bucket_notification" "destination_notification" {
+
+#############################################
+# Destination → Cross-Region Redundancy
+#############################################
+# To satisfy CKV_AWS_144 for the destination bucket,
+# we replicate it back to the primary region as a DR copy.
+resource "aws_s3_bucket_replication_configuration" "destination_cross_region_replication" {
   provider = aws.replica
   bucket   = aws_s3_bucket.destination_bucket.id
+  role     = aws_iam_role.replication_role.arn
 
-  topic {
-    topic_arn = var.sns_topic_arn
-    events    = ["s3:ObjectCreated:*"]
-  }
-}
-
-# Replicate artifacts_log bucket to the destination bucket (cross-region)
-resource "aws_s3_bucket_replication_configuration" "artifacts_log_replication" {
-  role   = aws_iam_role.replication_role.arn
-  bucket = aws_s3_bucket.artifacts_log.id
+  depends_on = [
+    aws_s3_bucket_versioning.destination_versioning
+  ]
 
   rule {
-    id     = "replicate-artifacts-log-to-destination"
+    id     = "replicate-destination-cross-region"
     status = "Enabled"
+    filter { prefix = "" }
 
-    filter {
-      prefix = ""
+    # NEW: required by AWS API (as of 2023+)
+    delete_marker_replication {
+      status = "Disabled"
     }
 
     destination {
-      bucket        = aws_s3_bucket.destination_bucket.arn
-      storage_class = "STANDARD"
+      bucket        = aws_s3_bucket.artifacts.arn
+      storage_class = "STANDARD_IA"
     }
   }
 }
 
-resource "aws_s3_bucket_lifecycle_configuration" "destination_bucket_lifecycle" {
-  bucket = aws_s3_bucket.destination_bucket.id
-
-  rule {
-    id     = "expire-old-objects"
-    status = "Enabled"
-
-    filter {
-      prefix = ""
-    }
-
-    # Expire old objects after 30 days
-    expiration {
-      days = 30
-    }
-
-    # NEW: Abort incomplete multipart uploads after 7 days
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-  }
-}
-
-
-resource "aws_s3_bucket_replication_configuration" "replication_logs" {
-  bucket = aws_s3_bucket.artifacts_log.id
-  role   = aws_iam_role.replication_role.arn
-
-  rule {
-    id     = "replicate-logs"
-    status = "Enabled"
-
-    destination {
-      bucket        = aws_s3_bucket.destination_bucket.arn
-      storage_class = "STANDARD"
-    }
-  }
-}

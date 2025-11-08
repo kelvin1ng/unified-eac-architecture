@@ -1,12 +1,9 @@
 #############################################
-# S3 Secure Module – FINAL (v2025-11-06)
-# Features:
-# - Primary + Replica S3 Buckets
-# - KMS Default Encryption (CKV_AWS_145)
-# - Versioning (CKV_AWS_21)
-# - Lifecycle Management (CKV2_AWS_61 / CKV_AWS_300)
-# - Public Access Block (CKV2_AWS_6)
-# - Cross-Region Replication Stub (CKV_AWS_144 compliant)
+# S3 Secure Module – Core Buckets
+# - Primary Artifacts Bucket (primary region)
+# - Destination Bucket (replica region)
+# - Default Encryption, Versioning, Lifecycle,
+#   Public Access Block
 #############################################
 
 terraform {
@@ -19,10 +16,10 @@ terraform {
   }
 }
 
-
 #############################################
 # Primary Artifacts Bucket
 #############################################
+
 resource "aws_s3_bucket" "artifacts" {
   bucket = var.bucket_name
 
@@ -32,7 +29,7 @@ resource "aws_s3_bucket" "artifacts" {
   }
 }
 
-# Default KMS encryption
+# Default KMS encryption for primary bucket
 resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_encryption" {
   bucket = aws_s3_bucket.artifacts.id
 
@@ -43,7 +40,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_encrypt
   }
 }
 
-# Public Access Block (CKV2_AWS_6)
+# Public Access Block for primary bucket
 resource "aws_s3_bucket_public_access_block" "artifacts_public_access" {
   bucket = aws_s3_bucket.artifacts.id
 
@@ -53,7 +50,7 @@ resource "aws_s3_bucket_public_access_block" "artifacts_public_access" {
   restrict_public_buckets = true
 }
 
-# Lifecycle configuration (CKV2_AWS_61 / CKV_AWS_300)
+# Lifecycle configuration for primary bucket
 resource "aws_s3_bucket_lifecycle_configuration" "artifacts_lifecycle" {
   bucket = aws_s3_bucket.artifacts.id
 
@@ -75,27 +72,31 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts_lifecycle" {
   }
 }
 
+# Versioning for primary bucket
+resource "aws_s3_bucket_versioning" "artifacts_versioning" {
+  bucket = aws_s3_bucket.artifacts.id
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_log_encryption" {
-  bucket = aws_s3_bucket.artifacts_log.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "aws:kms"
-    }
+  versioning_configuration {
+    status = "Enabled"
   }
+  /*
+  depends_on = [
+    aws_s3_bucket_replication_configuration.artifacts_replication
+  ]
+*/
 }
 
 #############################################
-# Replica Bucket (Cross-Region)
+# Destination Bucket (Replica Region)
 #############################################
+
 resource "aws_s3_bucket" "destination_bucket" {
   provider = aws.replica
-  bucket   = "eac-destination-${var.random_suffix}"
+  bucket   = "eac-artifacts-destination-${var.random_suffix}"
 
   tags = {
     Project = var.project_tag
-    Role    = "replica"
+    Role    = "destination"
   }
 }
 
@@ -128,9 +129,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "destination_lifecycle" {
     id     = "expire-destination-objects"
     status = "Enabled"
 
-    # Required by AWS Provider v5+
     filter {
-      prefix = "" # apply rule to all objects in the bucket
+      prefix = ""
     }
 
     expiration {
@@ -150,66 +150,9 @@ resource "aws_s3_bucket_versioning" "destination_versioning" {
   versioning_configuration {
     status = "Enabled"
   }
-}
-
-#############################################
-# Replication Role (cross-region stub)
-#############################################
-resource "aws_iam_role" "replication_role" {
-  name = "eac-replication-role-${var.random_suffix}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "s3.amazonaws.com"
-      }
-      Action = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "replication_policy" {
-  name = "eac-replication-policy-${var.random_suffix}"
-  role = aws_iam_role.replication_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetReplicationConfiguration", "s3:ListBucket"]
-        Resource = [aws_s3_bucket.artifacts.arn]
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetObjectVersion", "s3:GetObjectVersionAcl"]
-        Resource = ["${aws_s3_bucket.artifacts.arn}/*"]
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["s3:ReplicateObject", "s3:ReplicateDelete"]
-        Resource = ["${aws_s3_bucket.destination_bucket.arn}/*"]
-      }
-    ]
-  })
-}
-
-#############################################
-# Cross-Region Replication (Compliance Stub)
-#############################################
-resource "aws_s3_bucket_replication_configuration" "artifacts_replication" {
-  bucket = aws_s3_bucket.artifacts.id
-  role   = aws_iam_role.replication_role.arn
-
-  rule {
-    id     = "replicate-to-destination"
-    status = "Enabled"
-
-    destination {
-      bucket        = aws_s3_bucket.destination_bucket.arn
-      storage_class = "STANDARD"
-    }
-  }
+  /*
+  depends_on = [
+    aws_s3_bucket_replication_configuration.destination_cross_region_replication
+  ]
+*/
 }

@@ -1,6 +1,7 @@
 #############################################
 # Dummy root for modules directory
-# (Makes Terrascan happy; no resources here)
+# (Makes Terrascan and some tools happy;
+#  no resources are defined here.)
 #############################################
 
 terraform {
