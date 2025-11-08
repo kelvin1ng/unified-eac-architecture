@@ -46,12 +46,13 @@ jobs:
           tar -xzf conftest.tar.gz conftest && sudo mv conftest /usr/local/bin/
 
       - name: Terraform Init + Validate
+        working-directory: ./iac
         run: |
-          terraform init
+          terraform init -upgrade
           terraform validate
 
       - name: Static Scan – Checkov
-        run: checkov -d .
+        run: checkov -d ./iac
 
       - name: Static Scan – Terrascan
         run: |
@@ -69,8 +70,28 @@ jobs:
           fi
         shell: bash
 
-      - name: Policy Validation – Conftest
-        run: conftest test iac/
-
+      ##########################################
+      # Terraform Plan + JSON Export
+      ##########################################
       - name: Terraform Plan
+        working-directory: ./iac
         run: terraform plan -out plan.tfplan
+
+      - name: Export Terraform Plan to JSON
+        working-directory: ./iac
+        run: terraform show -json plan.tfplan > plan.json
+
+      ##########################################
+      # Policy-as-Code Validation (OPA/Rego)
+      ##########################################
+      - name: Policy Validation – Conftest (Plan)
+        working-directory: ./iac
+        run: conftest test plan.json --policy ../policy/
+
+      ##########################################
+      # Apply Phase (after successful validation)
+      ##########################################
+      - name: Terraform Apply
+        if: success()
+        working-directory: ./iac
+        run: terraform apply -auto-approve plan.tfplan
