@@ -55,13 +55,19 @@ jobs:
 
       - name: Static Scan – Terrascan
         run: |
+          EXIT_CODE=0
           terrascan scan -i terraform -t aws -d ./iac --non-recursive=false || EXIT_CODE=$?
           if [ "$EXIT_CODE" -eq 4 ]; then
             echo "No violations found, ignoring exit code 4 (non-issue)."
             exit 0
+          elif [ "$EXIT_CODE" -eq 0 ]; then
+            echo "Terrascan completed successfully with no violations."
+            exit 0
           else
+            echo "Terrascan failed with exit code $EXIT_CODE."
             exit $EXIT_CODE
           fi
+        shell: bash
 
       - name: Policy Validation – Conftest
         run: conftest test iac/
