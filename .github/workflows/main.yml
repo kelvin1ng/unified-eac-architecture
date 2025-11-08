@@ -9,16 +9,25 @@ on:
 
 permissions:
   contents: read
+  id-token: write   # REQUIRED for OIDC federation
   actions: read
   security-events: write
 
 jobs:
-  validate:
+  unified-eac:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::779937513192:role/github-terraform-role
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -81,6 +90,12 @@ jobs:
         working-directory: ./iac
         run: terraform show -json plan.tfplan > plan.json
 
+      - name: Upload Plan Artifact (for auditing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-json
+          path: ./iac/plan.json
+
       ##########################################
       # Policy-as-Code Validation (OPA/Rego)
       ##########################################
@@ -95,3 +110,14 @@ jobs:
         if: success()
         working-directory: ./iac
         run: terraform apply -auto-approve plan.tfplan
+
+      ##########################################
+      # 9️⃣ (Optional) Decode and Log OIDC Claims
+      ##########################################
+      - name: Decode OIDC token for audit (optional)
+        if: always()
+        run: |
+          echo "Decoding GitHub OIDC token claims..."
+          TOKEN=$(curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                      "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo $TOKEN | cut -d "." -f2 | base64 -d | jq .
