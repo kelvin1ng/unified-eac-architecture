@@ -46,6 +46,29 @@ resource "aws_s3_bucket_public_access_block" "destination_bucket_public_access" 
   restrict_public_buckets = true
 }
 
+# Lifecycle configuration for destination_bucket
+resource "aws_s3_bucket_lifecycle_configuration" "destination_bucket" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.destination_bucket.id
+
+  rule {
+    id     = "expire-destination-objects"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 365
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
 resource "aws_iam_role" "replication_role" {
   name = "eac-replication-role-${var.random_suffix}"
 

@@ -1,29 +1,6 @@
-/*
-resource "aws_s3_bucket_notification" "artifacts_notification" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  # Example skeleton:
-  # lambda_function {
-  #   lambda_function_arn = aws_lambda_function.your_function.arn
-  #   events              = ["s3:ObjectCreated:*"]
-  # }
-}
-
-resource "aws_s3_bucket_notification" "destination_notifications" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_bucket.id
-
-  topic {
-    topic_arn = aws_sns_topic.artifacts_events_replica.arn
-    events    = ["s3:ObjectCreated:*"]
-  }
-
-  depends_on = [
-    aws_sns_topic.artifacts_events_replica,
-    aws_sns_topic_policy.allow_s3_publish_destination_replica
-  ]
-}
-*/
+# Note: Event notifications for artifacts and artifacts_log buckets
+# These would require SNS topics in the primary region which are not currently defined
+# For now, only destination buckets have notifications configured
 
 # -------------------------------------------------------------------
 # SNS topic policy – allows destination and log buckets to publish
