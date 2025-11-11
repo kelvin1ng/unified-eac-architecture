@@ -12,25 +12,16 @@ __rego_metadata__ := {
 
 # Deny policies granting full access with wildcard actions
 deny contains msg if {
-  some i
-  rc := input.resource_changes[i]
-  rc.type == "aws_iam_role_policy"
-
-  policy := rc.change.after.policy
+  input.resource_changes[_].type == "aws_iam_role_policy"
+  policy := input.resource_changes[_].change.after.policy
   contains(policy, "*")
-
-  msg := sprintf("IAM policy '%v' allows wildcard permissions.", [rc.name])
+  msg := sprintf("IAM policy '%v' allows wildcard permissions.", [input.resource_changes[_].name])
 }
 
 # Deny use of AdministratorAccess
 deny contains msg if {
-  some i
-  rc := input.resource_changes[i]
-  rc.type == "aws_iam_role_policy_attachment"
-
-  policy_arn := rc.change.after.policy_arn
-  policy_arn != null
-  endswith(policy_arn, "AdministratorAccess")
-
-  msg := sprintf("IAM role '%v' attaches AdministratorAccess policy.", [rc.name])
+  input.resource_changes[_].type == "aws_iam_role_policy_attachment"
+  input.resource_changes[_].change.after.policy_arn
+  endswith(input.resource_changes[_].change.after.policy_arn, "AdministratorAccess")
+  msg := sprintf("IAM role '%v' attaches AdministratorAccess policy.", [input.resource_changes[_].name])
 }

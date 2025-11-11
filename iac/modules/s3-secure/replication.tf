@@ -1,24 +1,77 @@
-#############################################
-# Cross-Region Replication
-#############################################
+# -------------------------------------------------------------------
+# Destination (Replica) Bucket
+# -------------------------------------------------------------------
+resource "aws_s3_bucket" "destination_bucket" {
+  bucket = "eac-destination-${random_id.suffix.hex}"
 
-# IAM Role for replication
+  server_side_encryption_configuration {
+    rule {
+      apply_server_side_encryption_by_default {
+        #sse_algorithm = "aws:kms"
+        sse_algorithm = "AES256"
+      }
+    }
+  }
+
+  tags = {
+    Project = "unified-eac"
+    Role    = "replica"
+  }
+}
+
+
+# KMS Encryption
+resource "aws_s3_bucket_server_side_encryption_configuration" "destination_bucket" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.destination_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      #sse_algorithm = "aws:kms"
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Versioning
+resource "aws_s3_bucket_versioning" "destination_bucket" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.destination_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Public Access Block
+resource "aws_s3_bucket_public_access_block" "destination_bucket_public_access" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.destination_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 resource "aws_iam_role" "replication_role" {
-  name = "eac-replication-role-${var.random_suffix}"
+  name = "eac-replication-role-${random_id.suffix.hex}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "s3.amazonaws.com" }
-      Action    = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "s3.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
     }]
   })
 }
 
-# IAM Policy for replication access
+
 resource "aws_iam_role_policy" "replication_policy" {
-  name = "eac-replication-policy-${var.random_suffix}"
+  name = "replication-policy"
   role = aws_iam_role.replication_role.id
 
   policy = jsonencode({
@@ -26,62 +79,57 @@ resource "aws_iam_role_policy" "replication_policy" {
     Statement = [
       {
         Effect = "Allow"
-        Action = ["s3:GetReplicationConfiguration", "s3:ListBucket"]
-        Resource = [
-          aws_s3_bucket.artifacts.arn,
-          aws_s3_bucket.artifacts_log.arn
+        Action = [
+          "s3:GetReplicationConfiguration",
+          "s3:ListBucket"
         ]
+        Resource = [aws_s3_bucket.artifacts.arn]
       },
       {
         Effect = "Allow"
         Action = [
           "s3:GetObjectVersion",
-          "s3:GetObjectVersionAcl",
-          "s3:GetObjectVersionTagging"
+          "s3:GetObjectVersionAcl"
         ]
-        Resource = [
-          "${aws_s3_bucket.artifacts.arn}/*",
-          "${aws_s3_bucket.artifacts_log.arn}/*"
-        ]
+        Resource = ["${aws_s3_bucket.artifacts.arn}/*"]
       },
       {
         Effect = "Allow"
         Action = [
           "s3:ReplicateObject",
-          "s3:ReplicateDelete",
-          "s3:ReplicateTags",
-          "s3:ObjectOwnerOverrideToBucketOwner"
+          "s3:ReplicateDelete"
         ]
-        Resource = [
-          "${aws_s3_bucket.destination_bucket.arn}/*"
-        ]
+        Resource = ["${aws_s3_bucket.destination_bucket.arn}/*"]
       }
     ]
   })
 }
 
-#############################################
-# Primary Artifacts → Destination
-#############################################
-resource "aws_s3_bucket_replication_configuration" "artifacts_replication" {
+resource "time_sleep" "wait_for_destination_versioning" {
+  depends_on = [
+    aws_s3_bucket.destination_bucket,
+    aws_s3_bucket_versioning.destination_bucket
+  ]
+  create_duration = "30s"
+}
+
+resource "aws_s3_bucket_replication_configuration" "destination_cross_region_replication" {
   bucket = aws_s3_bucket.artifacts.id
   role   = aws_iam_role.replication_role.arn
 
   depends_on = [
-    aws_s3_bucket_versioning.artifacts_versioning,
-    aws_s3_bucket_versioning.destination_versioning
+    time_sleep.wait_for_destination_versioning,
+    aws_s3_bucket_versioning.artifacts_log
   ]
 
   rule {
-    id     = "replicate-artifacts-to-destination"
+    id     = "replicate-all-objects"
     status = "Enabled"
-    filter { prefix = "" }
 
-    # 🟩 Required for new S3 replication schema
     delete_marker_replication {
       status = "Disabled"
     }
-    
+
     destination {
       bucket        = aws_s3_bucket.destination_bucket.arn
       storage_class = "STANDARD"
@@ -90,34 +138,13 @@ resource "aws_s3_bucket_replication_configuration" "artifacts_replication" {
 }
 
 
-#############################################
-# Destination → Cross-Region Redundancy
-#############################################
-# To satisfy CKV_AWS_144 for the destination bucket,
-# we replicate it back to the primary region as a DR copy.
-resource "aws_s3_bucket_replication_configuration" "destination_cross_region_replication" {
+# Event Notification for Replica Bucket
+resource "aws_s3_bucket_notification" "destination_notification" {
   provider = aws.replica
   bucket   = aws_s3_bucket.destination_bucket.id
-  role     = aws_iam_role.replication_role.arn
 
-  depends_on = [
-    aws_s3_bucket_versioning.destination_versioning
-  ]
-
-  rule {
-    id     = "replicate-destination-cross-region"
-    status = "Enabled"
-    filter { prefix = "" }
-
-    # NEW: required by AWS API (as of 2023+)
-    delete_marker_replication {
-      status = "Disabled"
-    }
-
-    destination {
-      bucket        = aws_s3_bucket.artifacts.arn
-      storage_class = "STANDARD_IA"
-    }
+  topic {
+    topic_arn = aws_sns_topic.artifacts_events.arn
+    events    = ["s3:ObjectCreated:*"]
   }
 }
-

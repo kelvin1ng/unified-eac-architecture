@@ -1,79 +1,27 @@
 # -------------------------------------------------------------------
-# Log Bucket + Access Logging + Replication
+# Log Bucket
 # -------------------------------------------------------------------
-
 resource "aws_s3_bucket" "artifacts_log" {
-  bucket = "eac-artifacts-logs-${var.random_suffix}"
+  bucket = "eac-artifacts-logs-${random_id.suffix.hex}"
 
   tags = {
-    Project = var.project_tag
+    Project = "unified-eac"
     Role    = "log"
   }
 }
 
-# Enforce KMS encryption
-resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_log_encryption" {
-  bucket = aws_s3_bucket.artifacts_log.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "aws:kms"
-    }
-  }
-}
-
-# Enable versioning
-resource "aws_s3_bucket_versioning" "artifacts_log_versioning" {
-  bucket = aws_s3_bucket.artifacts_log.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-  /*
-  depends_on = [
-    aws_s3_bucket_replication_configuration.artifacts_log_replication
-  ]
-*/
-}
-
-# Block public access
-resource "aws_s3_bucket_public_access_block" "artifacts_log_public_access" {
-  bucket                  = aws_s3_bucket.artifacts_log.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-# Log from primary artifacts bucket → log bucket
-resource "aws_s3_bucket_logging" "artifacts_access_logging" {
-  bucket        = aws_s3_bucket.artifacts.id
-  target_bucket = aws_s3_bucket.artifacts_log.id
-  target_prefix = "artifacts/"
-}
-
 resource "aws_s3_bucket" "destination_log" {
   provider = aws.replica
-  bucket   = "eac-artifacts-logs-replica-${var.random_suffix}"
+  bucket   = "eac-artifacts-logs-replica-${random_id.suffix.hex}"
+
   tags = {
     Project = "unified-eac"
     Role    = "replica-log"
   }
 }
 
-# --- KMS encryption ---
-resource "aws_s3_bucket_server_side_encryption_configuration" "destination_log_encryption" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_log.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "aws:kms"
-    }
-  }
-}
-
-# --- Versioning ---
-resource "aws_s3_bucket_versioning" "destination_log_versioning" {
+# Versioning for replica log bucket
+resource "aws_s3_bucket_versioning" "destination_log" {
   provider = aws.replica
   bucket   = aws_s3_bucket.destination_log.id
 
@@ -82,10 +30,30 @@ resource "aws_s3_bucket_versioning" "destination_log_versioning" {
   }
 }
 
-# --- Public Access Block ---
-resource "aws_s3_bucket_public_access_block" "destination_log_pab" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_log.id
+# KMS Encryption
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_log" {
+  bucket = aws_s3_bucket.artifacts_log.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      #sse_algorithm = "aws:kms"
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Versioning
+resource "aws_s3_bucket_versioning" "artifacts_log" {
+  bucket = aws_s3_bucket.artifacts_log.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Public Access Block
+resource "aws_s3_bucket_public_access_block" "artifacts_log_public_access" {
+  bucket = aws_s3_bucket.artifacts_log.id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -93,47 +61,103 @@ resource "aws_s3_bucket_public_access_block" "destination_log_pab" {
   restrict_public_buckets = true
 }
 
-# --- Lifecycle ---
-resource "aws_s3_bucket_lifecycle_configuration" "destination_log_lifecycle" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_log.id
+# Access Logging from Primary & Replica
+resource "aws_s3_bucket_logging" "artifacts_logging" {
+  bucket        = aws_s3_bucket.artifacts.id
+  target_bucket = aws_s3_bucket.artifacts_log.id
+  target_prefix = "artifacts/"
+}
 
-  rule {
-    id     = "expire-destination-log-objects"
+resource "aws_s3_bucket_logging" "destination_logging" {
+  provider      = aws.replica
+  bucket        = aws_s3_bucket.destination_bucket.id
+  target_bucket = aws_s3_bucket.artifacts_log.id
+  target_prefix = "replica/"
+  versioning_configuration {
     status = "Enabled"
-    filter { prefix = "" }
-
-    expiration { days = 365 }
-
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
   }
 }
 
-# --- Replication (optional, same-region or cross-region) ---
-resource "aws_s3_bucket_replication_configuration" "destination_log_replication" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_log.id
-  role     = aws_iam_role.replication_role.arn
+# -------------------------------------------------------------------
+# SNS Topic Policy allowing S3 to Publish
+# -------------------------------------------------------------------
+resource "aws_sns_topic_policy" "allow_s3_publish" {
+  arn = aws_sns_topic.artifacts_events.arn
 
-  depends_on = [aws_s3_bucket_versioning.destination_log_versioning]
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid: "AllowS3Publish",
+        Effect: "Allow",
+        Principal = { Service = "s3.amazonaws.com" },
+        Action = "SNS:Publish",
+        Resource = aws_sns_topic.artifacts_events.arn,
+        Condition = {
+          ArnLike = {
+            "aws:SourceArn": aws_s3_bucket.artifacts_log.arn
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Event Notification for Log Bucket
+resource "aws_s3_bucket_notification" "artifacts_log_notification" {
+  bucket = aws_s3_bucket.artifacts_log.id
+
+  topic {
+    topic_arn = aws_sns_topic.artifacts_events.arn
+    events    = ["s3:ObjectRemoved:*"]
+  }
+
+  # Ensure SNS topic and its policy are ready
+  depends_on = [
+    aws_sns_topic.artifacts_events,
+    aws_sns_topic_policy.allow_s3_publish
+  ]
+}
+
+# -------------------------------------------------------------------
+# Delay to ensure replica versioning is active before replication
+# -------------------------------------------------------------------
+resource "time_sleep" "wait_for_destination_log_versioning" {
+  depends_on = [aws_s3_bucket_versioning.destination_log]
+  create_duration = "20s"
+}
+
+resource "aws_s3_bucket_replication_configuration" "log_replication" {
+  bucket = aws_s3_bucket.artifacts_log.id
+  role   = aws_iam_role.replication_role.arn
+
+  depends_on = [
+    aws_s3_bucket.destination_log,
+    aws_s3_bucket_versioning.artifacts_log,
+    aws_s3_bucket_versioning.destination_log,
+    time_sleep.wait_for_destination_log_versioning
+  ]
 
   rule {
-    id     = "replicate-destination-logs"
+    id     = "replicate-logs"
     status = "Enabled"
-    filter { prefix = "" }
 
-    delete_marker_replication { status = "Disabled" }
+    delete_marker_replication {
+      status = "Disabled"
+    }
 
     destination {
-      bucket        = aws_s3_bucket.artifacts_log.arn
+      bucket        = aws_s3_bucket.destination_log.arn
       storage_class = "STANDARD_IA"
     }
   }
 }
 
-# --- Event Notifications ---
+resource "aws_sns_topic" "artifacts_events_replica" {
+  provider = aws.replica
+  name     = "eac-artifacts-events-replica-${random_id.suffix.hex}"
+}
+
 resource "aws_s3_bucket_notification" "destination_log_notifications" {
   provider = aws.replica
   bucket   = aws_s3_bucket.destination_log.id
@@ -144,57 +168,30 @@ resource "aws_s3_bucket_notification" "destination_log_notifications" {
   }
 
   depends_on = [
-    aws_sns_topic_policy.allow_s3_publish_replica
+    aws_sns_topic.artifacts_events_replica,
+    aws_sns_topic_policy.allow_s3_publish_destination_replica
   ]
 }
 
-# Log from destination bucket → log bucket
-resource "aws_s3_bucket_logging" "destination_access_logging" {
-  provider      = aws.replica
-  bucket        = aws_s3_bucket.destination_bucket.id
-  target_bucket = aws_s3_bucket.destination_log.id
-  target_prefix = "replica/"
+resource "aws_sns_topic_policy" "allow_s3_publish_destination_replica" {
+  provider = aws.replica
+  arn      = aws_sns_topic.artifacts_events_replica.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid: "AllowS3PublishReplica",
+        Effect: "Allow",
+        Principal = { Service = "s3.amazonaws.com" },
+        Action = "SNS:Publish",
+        Resource = aws_sns_topic.artifacts_events_replica.arn,
+        Condition = {
+          ArnLike = {
+            "aws:SourceArn": aws_s3_bucket.destination_log.arn
+          }
+        }
+      }
+    ]
+  })
 }
-
-# Lifecycle management
-resource "aws_s3_bucket_lifecycle_configuration" "artifacts_log_lifecycle" {
-  bucket = aws_s3_bucket.artifacts_log.id
-
-  rule {
-    id     = "abort-failed-uploads"
-    status = "Enabled"
-    filter { prefix = "" }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-  }
-}
-
-# -------------------------------------------------------------------
-# Cross-region replication for log bucket
-# -------------------------------------------------------------------
-# This satisfies CKV_AWS_144
-resource "aws_s3_bucket_replication_configuration" "artifacts_log_replication" {
-  bucket = aws_s3_bucket.artifacts_log.id
-  role   = aws_iam_role.replication_role.arn
-
-  depends_on = [
-    aws_s3_bucket_versioning.artifacts_log_versioning
-  ]
-
-  rule {
-    id     = "replicate-artifacts-log"
-    status = "Enabled"
-    filter { prefix = "" }
-
-    delete_marker_replication {
-      status = "Disabled"
-    }
-
-    destination {
-      bucket        = aws_s3_bucket.destination_bucket.arn
-      storage_class = "STANDARD"
-    }
-  }
-}
-
