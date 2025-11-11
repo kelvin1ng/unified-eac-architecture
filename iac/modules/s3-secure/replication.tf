@@ -142,10 +142,6 @@ resource "aws_s3_bucket_replication_configuration" "destination_cross_region_rep
     id     = "replicate-all-objects"
     status = "Enabled"
 
-    delete_marker_replication {
-      status = "Disabled"
-    }
-
     destination {
       bucket        = aws_s3_bucket.destination_bucket.arn
       storage_class = "STANDARD"
