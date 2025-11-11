@@ -1,11 +1,3 @@
-# -------------------------------------------------------------------
-# Destination SNS topic (replica region)
-# -------------------------------------------------------------------
-resource "aws_sns_topic" "artifacts_events_replica" {
-  provider = aws.replica
-  name     = "eac-artifacts-events-replica-${random_id.suffix.hex}"
-}
-
 /*
 resource "aws_s3_bucket_notification" "artifacts_notification" {
   bucket = aws_s3_bucket.artifacts.id
@@ -51,7 +43,7 @@ resource "aws_sns_topic_policy" "allow_s3_publish_destination_replica" {
         Resource = aws_sns_topic.artifacts_events_replica.arn,
         Condition = {
           ArnEquals = {
-            "aws:SourceArn" = "arn:aws:s3:::eac-artifacts-destination-${random_id.suffix.hex}"
+            "aws:SourceArn" = aws_s3_bucket.destination_bucket.arn
           }
         }
       },
@@ -63,7 +55,7 @@ resource "aws_sns_topic_policy" "allow_s3_publish_destination_replica" {
         Resource = aws_sns_topic.artifacts_events_replica.arn,
         Condition = {
           ArnEquals = {
-            "aws:SourceArn" = "arn:aws:s3:::eac-artifacts-logs-replica-${random_id.suffix.hex}"
+            "aws:SourceArn" = aws_s3_bucket.destination_log.arn
           }
         }
       }

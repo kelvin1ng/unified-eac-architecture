@@ -173,25 +173,3 @@ resource "aws_s3_bucket_notification" "destination_log_notifications" {
   ]
 }
 
-resource "aws_sns_topic_policy" "allow_s3_publish_destination_replica" {
-  provider = aws.replica
-  arn      = aws_sns_topic.artifacts_events_replica.arn
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid: "AllowS3PublishReplica",
-        Effect: "Allow",
-        Principal = { Service = "s3.amazonaws.com" },
-        Action = "SNS:Publish",
-        Resource = aws_sns_topic.artifacts_events_replica.arn,
-        Condition = {
-          ArnLike = {
-            "aws:SourceArn": aws_s3_bucket.destination_log.arn
-          }
-        }
-      }
-    ]
-  })
-}
