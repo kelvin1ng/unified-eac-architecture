@@ -42,6 +42,18 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_log" {
   }
 }
 
+# Encryption for destination_log
+resource "aws_s3_bucket_server_side_encryption_configuration" "destination_log" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.destination_log.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
 # Versioning
 resource "aws_s3_bucket_versioning" "artifacts_log" {
   bucket = aws_s3_bucket.artifacts_log.id
@@ -54,6 +66,17 @@ resource "aws_s3_bucket_versioning" "artifacts_log" {
 # Public Access Block
 resource "aws_s3_bucket_public_access_block" "artifacts_log_public_access" {
   bucket = aws_s3_bucket.artifacts_log.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Public Access Block for destination_log
+resource "aws_s3_bucket_public_access_block" "destination_log_public_access" {
+  provider = aws.replica
+  bucket   = aws_s3_bucket.destination_log.id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -112,9 +135,81 @@ resource "aws_s3_bucket_replication_configuration" "log_replication" {
   }
 }
 
-resource "aws_sns_topic" "artifacts_events_replica" {
+# Lifecycle configuration for artifacts_log
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts_log" {
+  bucket = aws_s3_bucket.artifacts_log.id
+
+  rule {
+    id     = "expire-old-logs"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+# Lifecycle configuration for destination_log
+resource "aws_s3_bucket_lifecycle_configuration" "destination_log" {
   provider = aws.replica
-  name     = "eac-artifacts-events-replica-${var.random_suffix}"
+  bucket   = aws_s3_bucket.destination_log.id
+
+  rule {
+    id     = "expire-old-replica-logs"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+# KMS key for SNS topic encryption in replica region
+data "aws_caller_identity" "current_replica" {
+  provider = aws.replica
+}
+
+resource "aws_kms_key" "sns_key_replica" {
+  provider                = aws.replica
+  description             = "KMS key for SNS topic encryption in replica region"
+  deletion_window_in_days = 10
+  enable_key_rotation     = true
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableIAMUserPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current_replica.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_sns_topic" "artifacts_events_replica" {
+  provider          = aws.replica
+  name              = "eac-artifacts-events-replica-${var.random_suffix}"
+  kms_master_key_id = aws_kms_key.sns_key_replica.arn
 }
 
 resource "aws_s3_bucket_notification" "destination_log_notifications" {
