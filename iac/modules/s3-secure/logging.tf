@@ -171,10 +171,6 @@ resource "aws_s3_bucket_replication_configuration" "log_replication" {
     id     = "replicate-logs"
     status = "Enabled"
 
-    delete_marker_replication {
-      status = "Disabled"
-    }
-
     destination {
       bucket        = aws_s3_bucket.destination_log.arn
       storage_class = "STANDARD_IA"
