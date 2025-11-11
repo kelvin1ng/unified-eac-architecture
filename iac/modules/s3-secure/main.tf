@@ -1,4 +1,4 @@
-terraform {
+﻿terraform {
   required_providers {
     aws = {
       source                = "hashicorp/aws"
@@ -11,6 +11,47 @@ terraform {
     }
   }
 }
+
+# KMS key for S3 bucket encryption in primary region
+data "aws_caller_identity" "current" {}
+
+resource "aws_kms_key" "s3_key" {
+  description             = "KMS key for S3 bucket encryption in primary region"
+  deletion_window_in_days = 10
+  enable_key_rotation     = true
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableIAMUserPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowS3Service"
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_kms_alias" "s3_key" {
+  name          = "alias/s3-bucket-key-${var.random_suffix}"
+  target_key_id = aws_kms_key.s3_key.key_id
+}
+
 resource "aws_s3_bucket" "artifacts" {
   bucket = var.bucket_name
 
@@ -35,8 +76,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.s3_key.arn
     }
+    bucket_key_enabled = true
   }
 }
 
@@ -70,5 +113,6 @@ resource "aws_s3_bucket_versioning" "artifacts" {
     status = "Enabled"
   }
 }
+
 
 

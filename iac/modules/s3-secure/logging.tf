@@ -30,27 +30,74 @@ resource "aws_s3_bucket_versioning" "destination_log" {
   }
 }
 
-# KMS Encryption
+# KMS Encryption for artifacts_log using primary region KMS key
 resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_log" {
   bucket = aws_s3_bucket.artifacts_log.id
 
   rule {
     apply_server_side_encryption_by_default {
-      #sse_algorithm = "aws:kms"
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.s3_key.arn
     }
+    bucket_key_enabled = true
   }
 }
 
-# Encryption for destination_log
+# KMS key for S3 bucket encryption in replica region
+data "aws_caller_identity" "current_replica_s3" {
+  provider = aws.replica
+}
+
+resource "aws_kms_key" "s3_key_replica" {
+  provider                = aws.replica
+  description             = "KMS key for S3 bucket encryption in replica region"
+  deletion_window_in_days = 10
+  enable_key_rotation     = true
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableIAMUserPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current_replica_s3.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowS3Service"
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_kms_alias" "s3_key_replica" {
+  provider      = aws.replica
+  name          = "alias/s3-bucket-key-replica-${var.random_suffix}"
+  target_key_id = aws_kms_key.s3_key_replica.key_id
+}
+
+# Encryption for destination_log using replica region KMS key
 resource "aws_s3_bucket_server_side_encryption_configuration" "destination_log" {
   provider = aws.replica
   bucket   = aws_s3_bucket.destination_log.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.s3_key_replica.arn
     }
+    bucket_key_enabled = true
   }
 }
 

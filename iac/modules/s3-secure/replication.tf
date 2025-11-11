@@ -12,16 +12,17 @@ resource "aws_s3_bucket" "destination_bucket" {
 }
 
 
-# KMS Encryption
+# KMS Encryption for destination_bucket using replica region KMS key
 resource "aws_s3_bucket_server_side_encryption_configuration" "destination_bucket" {
   provider = aws.replica
   bucket   = aws_s3_bucket.destination_bucket.id
 
   rule {
     apply_server_side_encryption_by_default {
-      #sse_algorithm = "aws:kms"
-      sse_algorithm = "AES256"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.s3_key_replica.arn
     }
+    bucket_key_enabled = true
   }
 }
 
