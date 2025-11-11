@@ -1,7 +1,7 @@
 # -------------------------------------------------------------------
 # SNS Topic for Primary Region (artifacts and artifacts_log buckets)
 # -------------------------------------------------------------------
-data "aws_caller_identity" "current" {}
+# Note: data.aws_caller_identity.current is defined in main.tf
 
 resource "aws_kms_key" "sns_key" {
   description             = "KMS key for SNS topic encryption in primary region"
