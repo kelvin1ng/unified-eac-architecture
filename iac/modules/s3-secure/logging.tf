@@ -2,7 +2,7 @@
 # Log Bucket
 # -------------------------------------------------------------------
 resource "aws_s3_bucket" "artifacts_log" {
-  bucket = "eac-artifacts-logs-${random_id.suffix.hex}"
+  bucket = "eac-artifacts-logs-${var.random_suffix}"
 
   tags = {
     Project = "unified-eac"
@@ -12,7 +12,7 @@ resource "aws_s3_bucket" "artifacts_log" {
 
 resource "aws_s3_bucket" "destination_log" {
   provider = aws.replica
-  bucket   = "eac-artifacts-logs-replica-${random_id.suffix.hex}"
+  bucket   = "eac-artifacts-logs-replica-${var.random_suffix}"
 
   tags = {
     Project = "unified-eac"
@@ -71,53 +71,12 @@ resource "aws_s3_bucket_logging" "artifacts_logging" {
 resource "aws_s3_bucket_logging" "destination_logging" {
   provider      = aws.replica
   bucket        = aws_s3_bucket.destination_bucket.id
-  target_bucket = aws_s3_bucket.artifacts_log.id
+  target_bucket = aws_s3_bucket.destination_log.id
   target_prefix = "replica/"
-  versioning_configuration {
-    status = "Enabled"
-  }
 }
 
-# -------------------------------------------------------------------
-# SNS Topic Policy allowing S3 to Publish
-# -------------------------------------------------------------------
-resource "aws_sns_topic_policy" "allow_s3_publish" {
-  arn = aws_sns_topic.artifacts_events.arn
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid: "AllowS3Publish",
-        Effect: "Allow",
-        Principal = { Service = "s3.amazonaws.com" },
-        Action = "SNS:Publish",
-        Resource = aws_sns_topic.artifacts_events.arn,
-        Condition = {
-          ArnLike = {
-            "aws:SourceArn": aws_s3_bucket.artifacts_log.arn
-          }
-        }
-      }
-    ]
-  })
-}
-
-# Event Notification for Log Bucket
-resource "aws_s3_bucket_notification" "artifacts_log_notification" {
-  bucket = aws_s3_bucket.artifacts_log.id
-
-  topic {
-    topic_arn = aws_sns_topic.artifacts_events.arn
-    events    = ["s3:ObjectRemoved:*"]
-  }
-
-  # Ensure SNS topic and its policy are ready
-  depends_on = [
-    aws_sns_topic.artifacts_events,
-    aws_sns_topic_policy.allow_s3_publish
-  ]
-}
+# Note: SNS topic artifacts_events should be defined in root module or passed as variable
+# Removing references to undefined resource for now
 
 # -------------------------------------------------------------------
 # Delay to ensure replica versioning is active before replication
@@ -155,7 +114,7 @@ resource "aws_s3_bucket_replication_configuration" "log_replication" {
 
 resource "aws_sns_topic" "artifacts_events_replica" {
   provider = aws.replica
-  name     = "eac-artifacts-events-replica-${random_id.suffix.hex}"
+  name     = "eac-artifacts-events-replica-${var.random_suffix}"
 }
 
 resource "aws_s3_bucket_notification" "destination_log_notifications" {
