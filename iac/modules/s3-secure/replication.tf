@@ -2,16 +2,8 @@
 # Destination (Replica) Bucket
 # -------------------------------------------------------------------
 resource "aws_s3_bucket" "destination_bucket" {
-  bucket = "eac-destination-${random_id.suffix.hex}"
-
-  server_side_encryption_configuration {
-    rule {
-      apply_server_side_encryption_by_default {
-        #sse_algorithm = "aws:kms"
-        sse_algorithm = "AES256"
-      }
-    }
-  }
+  provider = aws.replica
+  bucket   = "eac-artifacts-destination-${var.random_suffix}"
 
   tags = {
     Project = "unified-eac"
@@ -55,7 +47,7 @@ resource "aws_s3_bucket_public_access_block" "destination_bucket_public_access" 
 }
 
 resource "aws_iam_role" "replication_role" {
-  name = "eac-replication-role-${random_id.suffix.hex}"
+  name = "eac-replication-role-${var.random_suffix}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -138,13 +130,4 @@ resource "aws_s3_bucket_replication_configuration" "destination_cross_region_rep
 }
 
 
-# Event Notification for Replica Bucket
-resource "aws_s3_bucket_notification" "destination_notification" {
-  provider = aws.replica
-  bucket   = aws_s3_bucket.destination_bucket.id
-
-  topic {
-    topic_arn = aws_sns_topic.artifacts_events.arn
-    events    = ["s3:ObjectCreated:*"]
-  }
-}
+# Note: destination_notification removed - using destination_notifications in notifications.tf instead

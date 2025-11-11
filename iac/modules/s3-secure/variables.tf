@@ -13,3 +13,8 @@ variable "replica_region" {
   type        = string
   default     = "us-east-1"
 }
+
+variable "random_suffix" {
+  description = "Random suffix used to ensure globally unique bucket names"
+  type        = string
+}

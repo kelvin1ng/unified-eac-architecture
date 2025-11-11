@@ -33,7 +33,7 @@ deny contains msg if {
 # Detect potential hard-coded secrets
 deny contains msg if {
   input.resource_changes[_].type == "terraform_variable"
-  lower(input.resource_changes[_].change.after.default)
+  input.resource_changes[_].change.after.default
   contains(lower(input.resource_changes[_].change.after.default), "secret")
   msg := sprintf("Variable '%v' contains a hard-coded secret.", [input.resource_changes[_].name])
 }

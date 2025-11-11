@@ -28,6 +28,15 @@ provider "aws" {
 
 module "s3_secure" {
   source = "./modules/s3-secure"
+
+  bucket_name   = "eac-demo-artifacts-${random_id.suffix.hex}"
+  project_tag   = "unified-eac"
+  random_suffix = random_id.suffix.hex
+
+  providers = {
+    aws         = aws
+    aws.replica = aws.replica
+  }
 }
 
 
@@ -35,179 +44,40 @@ resource "random_id" "suffix" {
   byte_length = 4
 }
 
-# -----------------------------
-# Primary S3 Bucket (artifacts)
-# -----------------------------
-resource "aws_s3_bucket" "artifacts" {
-  bucket = "eac-demo-artifacts-${random_id.suffix.hex}"
-
-  tags = {
-    Project = "unified-eac"
-    Role    = "primary"
-  }
-}
-
-# -----------------------------
-# Logging Bucket
-# -----------------------------
-resource "aws_s3_bucket" "artifacts_log" {
-  bucket = "eac-artifacts-logs-${random_id.suffix.hex}"
-
-  tags = {
-    Project = "unified-eac"
-    Role    = "log"
-  }
-}
-
-resource "aws_s3_bucket_logging" "artifacts_logging" {
-  bucket        = aws_s3_bucket.artifacts.id
-  target_bucket = aws_s3_bucket.artifacts_log.id
-  target_prefix = "log/"
-}
+# Primary and log buckets are now managed by the s3_secure module
+# Using module outputs for references
 
 # -----------------------------
 # Destination Bucket (Replication)
 # -----------------------------
-resource "aws_s3_bucket" "destination_bucket" {
-  provider = aws.replica
-  bucket   = "eac-artifacts-destination-${random_id.suffix.hex}"
+# Destination bucket is now managed by the s3_secure module
+# Removing duplicate definition to avoid conflicts
 
-  versioning {
-    enabled = true
-  }
-
-  tags = {
-    Project = "unified-eac"
-    Role    = "replica"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "destination_bucket_encryption" {
-  bucket = aws_s3_bucket.destination_bucket.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      #sse_algorithm = "aws:kms"
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_encryption" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      #sse_algorithm = "aws:kms"
-      sse_algorithm = "AES256"
-    }
-  }
-}
+# Encryption is now managed by the s3_secure module
 
 
-# -----------------------------
-# IAM Role for Replication
-# -----------------------------
-resource "aws_iam_role" "replication_role" {
-  name = "eac-replication-role-${random_id.suffix.hex}"
+# IAM Role for Replication is now managed by the s3_secure module
+# Removing duplicate definition to avoid conflicts
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "s3.amazonaws.com"
-      }
-      Action = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "replication_policy" {
-  name = "replication-policy"
-  role = aws_iam_role.replication_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetReplicationConfiguration",
-          "s3:ListBucket"
-        ]
-        Resource = [aws_s3_bucket.artifacts.arn]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObjectVersion",
-          "s3:GetObjectVersionAcl"
-        ]
-        Resource = ["${aws_s3_bucket.artifacts.arn}/*"]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:ReplicateObject",
-          "s3:ReplicateDelete"
-        ]
-        Resource = ["${aws_s3_bucket.destination_bucket.arn}/*"]
-      }
-    ]
-  })
-}
-
-# -----------------------------
-# Bucket Lifecycle Policy
-# -----------------------------
-resource "aws_s3_bucket_lifecycle_configuration" "artifacts_lifecycle" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  rule {
-    id     = "expire-old-objects"
-    status = "Enabled"
-
-    filter {
-      prefix = ""
-    }
-
-    expiration {
-      days = 30
-    }
-  }
-}
+# Lifecycle policy is now managed by the s3_secure module
 
 # -----------------------------
 # Replication Configuration
 # -----------------------------
-resource "aws_s3_bucket_replication_configuration" "artifacts_replication" {
-  depends_on = [aws_iam_role_policy.replication_policy]
-  bucket     = aws_s3_bucket.artifacts.id
-  role       = aws_iam_role.replication_role.arn
-
-  rule {
-    id     = "replicate-to-destination"
-    status = "Enabled"
-
-    destination {
-      bucket        = aws_s3_bucket.destination_bucket.arn
-      storage_class = "STANDARD"
-    }
-  }
-}
+# Replication is now managed by the s3_secure module
+# Removing duplicate definition to avoid conflicts
 
 # -----------------------------
 # Outputs
 # -----------------------------
 output "artifacts_bucket_name" {
-  value = aws_s3_bucket.artifacts.bucket
+  value = module.s3_secure.bucket_name
 }
 
 output "destination_bucket_name" {
-  value = aws_s3_bucket.destination_bucket.bucket
+  value = module.s3_secure.destination_bucket_id
 }
 
 output "log_bucket_name" {
-  value = aws_s3_bucket.artifacts_log.bucket
+  value = "eac-artifacts-logs-${random_id.suffix.hex}"
 }
