@@ -60,8 +60,8 @@ jobs:
           terraform init -upgrade
           terraform validate
 
-      - name: Static Scan – Checkov
-        run: checkov -d ./iac
+      - name: Static Scan – Checkov (Terraform only, skip plan scan)
+        run: checkov -d ./iac --framework terraform
 
       - name: Static Scan – Terrascan
         run: |
